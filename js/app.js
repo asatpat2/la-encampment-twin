@@ -18,7 +18,7 @@
   };
   const ATTRIB = "Esri, HERE, Garmin, FAO, NOAA, USGS";
   const CAPTIONS = {
-    actionable: "Greedy search over feasible +1 increments only (never decreases, never exceeds the 95th-percentile observed value). Safe to present as real intervention ideas.",
+    actionable: "Greedy search over feasible +1 increments only (never decreases, never exceeds the 95th-percentile observed value). Results reflect associations learned by the model, not causal effects of adding facilities.",
     exploratory: "⚠️ Allows +1 or -1 moves. A decrease (e.g. fewer libraries) isn't a feasible intervention either — this shows what the fitted surface says minimizes vulnerability mathematically within the non-frozen set, not a real-world action list.",
     combined: "Same non-frozen variable set and both directions as Unconstrained, but every step is tagged ✅ Feasible (an increase) or ⚠️ Infeasible (a decrease), with a separate re-scored 'feasible-only' vulnerability. A shared K budget means large decreases can crowd out feasible increases.",
   };
@@ -185,7 +185,9 @@
   function renderHeadline() {
     const H = state.H, i = state.sel, p = state.pred, f = state.data.features;
     $("#hex-title").textContent = `Hex ${H.gid[i]}`;
-    $("#centroid-note").textContent = "Centroid: " + (H.detected[i] ? "actual (averaged detection points)" : "reconstructed (no detections in this hex)");
+    $("#centroid-note").textContent = H.n311
+      ? `Verified encampment locations: ${H.tent[i]} · 311 requests: ${H.n311[i]}`
+      : "Centroid: " + (H.detected[i] ? "actual (averaged detection points)" : "reconstructed (no detections in this hex)");
     const base = H.risk[i];
     $("#m-pred").textContent = pct(p.risk, 1);
     $("#m-delta").innerHTML = deltaHtml(p.risk - base, "vs. real values");

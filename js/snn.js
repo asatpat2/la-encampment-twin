@@ -22,33 +22,47 @@
       this.pairNames = this.pairs.map(([a, b]) => `${a}__x__${b}`);
       this.mean = Float64Array.from(art.scaler_base_mean);
       this.scale = Float64Array.from(art.scaler_base_scale);
+      // Widths: one shared width per net (original export) or one per basis function (corrected model).
+      const fill = (len, w) => Float64Array.from({ length: len }, () => w);
       this.mainNets = art.main_nets.map((n) => ({
-        centers: Float64Array.from(n.centers), width: n.width, coef: Float64Array.from(n.coef),
+        centers: Float64Array.from(n.centers), coef: Float64Array.from(n.coef),
+        w: n.widths ? Float64Array.from(n.widths) : fill(n.centers.length, n.width),
       }));
       this.pairNets = art.pair_nets.map((n) => ({
-        cj: Float64Array.from(n.cj), ck: Float64Array.from(n.ck),
-        width: n.width, coef: Float64Array.from(n.coef),
+        cj: Float64Array.from(n.cj), ck: Float64Array.from(n.ck), coef: Float64Array.from(n.coef),
+        wj: n.wj ? Float64Array.from(n.wj) : fill(n.cj.length, n.width),
+        wk: n.wk ? Float64Array.from(n.wk) : fill(n.ck.length, n.width),
       }));
+      // Link: "sigmoid" (original model) or "identity" (corrected SNN, fitted to teacher probabilities; clipped to [0, 1]).
+      this.link = art.link || "sigmoid";
+      // Optional offsets: contributions are reported relative to the average cell (risk itself is unaffected).
+      this.mainOff = art.main_offsets ? Float64Array.from(art.main_offsets) : new Float64Array(art.main_nets.length);
+      this.pairOff = art.pair_offsets ? Float64Array.from(art.pair_offsets) : new Float64Array(art.pair_nets.length);
       this.index = {};
       this.features.forEach((f, i) => { this.index[f] = i; });
       this.pairIdx = this.pairs.map(([a, b]) => [this.index[a], this.index[b]]);
     }
 
     _main(j, s) {
-      const net = this.mainNets[j], c = net.centers, w = net.width, coef = net.coef;
+      const net = this.mainNets[j], c = net.centers, w = net.w, coef = net.coef;
       let t = coef[0];
-      for (let i = 0; i < c.length; i++) { const d = s - c[i]; t += coef[i + 1] * Math.exp(-w * d * d); }
+      for (let i = 0; i < c.length; i++) { const d = s - c[i]; t += coef[i + 1] * Math.exp(-w[i] * d * d); }
       return t;
     }
 
     _pair(p, sj, sk) {
-      const net = this.pairNets[p], cj = net.cj, ck = net.ck, w = net.width, coef = net.coef;
+      const net = this.pairNets[p], cj = net.cj, ck = net.ck, wj = net.wj, wk = net.wk, coef = net.coef;
       let t = coef[0];
       for (let i = 0; i < cj.length; i++) {
         const dj = sj - cj[i], dk = sk - ck[i];
-        t += coef[i + 1] * (Math.exp(-w * dj * dj) * Math.exp(-w * dk * dk));
+        t += coef[i + 1] * (Math.exp(-wj[i] * dj * dj) * Math.exp(-wk[i] * dk * dk));
       }
       return t;
+    }
+
+    _out(total) {
+      if (this.link === "identity") return total < 0 ? 0 : total > 1 ? 1 : total;
+      return sigmoid(total);
     }
 
     /** Fast path: x is an array aligned to model.features. Returns risk only. */
@@ -60,7 +74,7 @@
       for (let p = 0; p < this.pairIdx.length; p++) {
         total += this._pair(p, std[this.pairIdx[p][0]], std[this.pairIdx[p][1]]);
       }
-      return sigmoid(total);
+      return this._out(total);
     }
 
     /** Full path: returns {risk, main:[...per feature], inter:[...per pair]}. */
@@ -69,13 +83,13 @@
       for (let j = 0; j < n; j++) std[j] = (x[j] - this.mean[j]) / this.scale[j];
       const main = new Array(n);
       let total = 0;
-      for (let j = 0; j < n; j++) { main[j] = this._main(j, std[j]); total += main[j]; }
+      for (let j = 0; j < n; j++) { const v = this._main(j, std[j]); total += v; main[j] = v - this.mainOff[j]; }
       const inter = new Array(this.pairIdx.length);
       for (let p = 0; p < this.pairIdx.length; p++) {
-        inter[p] = this._pair(p, std[this.pairIdx[p][0]], std[this.pairIdx[p][1]]);
-        total += inter[p];
+        const v = this._pair(p, std[this.pairIdx[p][0]], std[this.pairIdx[p][1]]);
+        total += v; inter[p] = v - this.pairOff[p];
       }
-      return { risk: sigmoid(total), main, inter };
+      return { risk: this._out(total), main, inter };
     }
   }
 
